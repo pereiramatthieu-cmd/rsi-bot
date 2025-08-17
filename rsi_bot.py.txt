@@ -1,0 +1,76 @@
+import requests
+import numpy as np
+import json
+import os
+
+# --------------------- CONFIG ---------------------
+TELEGRAM_TOKEN = "8231012355:AAGbPVCOFso6FGO3Lts603IJjlNrtJYUyU8"
+CHAT_ID = "8469718365"
+STATE_FILE = "rsi_state.json"
+
+RSI_BUY = 35   # RSI zone d'achat
+RSI_SELL = 60  # RSI zone de vente
+PERIOD_RSI = 14
+
+# --------------------- FONCTIONS ---------------------
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": message}
+    try:
+        requests.post(url, data=payload)
+    except Exception as e:
+        print("Erreur Telegram :", e)
+
+def fetch_top50_usdt():
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+    params = {"vs_currency": "usd", "order": "market_cap_desc", "per_page": 50, "page": 1}
+    r = requests.get(url, params=params)
+    return r.json()
+
+def calculate_rsi(prices, period=14):
+    if len(prices) < period + 1:
+        return None
+    deltas = np.diff(prices)
+    gains = deltas[deltas > 0].sum() / period
+    losses = -deltas[deltas < 0].sum() / period
+    if losses == 0:
+        return 100
+    rs = gains / losses
+    return 100 - (100 / (1 + rs))
+
+def load_state():
+    try:
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+# --------------------- EXECUTION ---------------------
+state = load_state()
+data = fetch_top50_usdt()
+
+for coin in data:
+    history_url = f"https://api.coingecko.com/api/v3/coins/{coin['id']}/market_chart"
+    params = {"vs_currency": "usd", "days": "30"}
+    hist = requests.get(history_url, params=params).json()
+    prices = [p[1] for p in hist.get("prices", [])]
+    rsi = calculate_rsi(prices)
+    if rsi is not None:
+        zone = None
+        if rsi <= RSI_BUY:
+            zone = "ACHETE"
+        elif rsi >= RSI_SELL:
+            zone = "VEND"
+
+        last_zone = state.get(coin['id'])
+        if zone and zone != last_zone:
+            send_telegram_message(f"{coin['symbol'].upper()} RSI = {rsi:.2f} → {zone}")
+            state[coin['id']] = zone
+        elif not zone:
+            state[coin['id']] = None
+
+save_state(state)
